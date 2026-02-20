@@ -725,84 +725,88 @@ function formatAttachment(attachments, attachmentIds, attachmentMap, shareMap) {
 function formatDeltaMessage(m) {
     const delta = m?.delta || {};
     const md = delta?.messageMetadata || {};
-    const data = delta?.data || {};
 
     //--------------------------------------------------
-    // 1. Get body safely (Messenger sends in many places)
+    // 1. BODY (Messenger puts text in many places)
     //--------------------------------------------------
     const body =
         delta?.body ??
         delta?.message?.body ??
+        delta?.message?.text ??
         "";
 
     //--------------------------------------------------
-    // 2. Parse mentions correctly
+    // 2. FIND MENTION DATA EVERYWHERE
     //--------------------------------------------------
-    const mentions = {};
+    const possiblePrng = [
+        delta?.data?.prng,
+        delta?.message?.data?.prng,
+        delta?.message?.prng,
+        delta?.data?.mentions,
+        delta?.message?.data?.mentions
+    ];
 
-    try {
-        const mdata = data?.prng ? JSON.parse(data.prng) : [];
-
-        for (const item of mdata) {
-            if (!item?.i) continue;
-
-            const uid = item.i.toString();
-
-            let text = "@mention";
-
-            if (typeof item.o === "number" && typeof item.l === "number") {
-                text = body.substring(item.o, item.o + item.l) || "@mention";
-            }
-
-            mentions[uid] = text;
-        }
-    } catch (e) {
-        console.log("Mention parse error:", e);
+    let mdata = [];
+    for (const p of possiblePrng) {
+        if (!p) continue;
+        try {
+            mdata = typeof p === "string" ? JSON.parse(p) : p;
+            if (Array.isArray(mdata) && mdata.length) break;
+        } catch {}
     }
 
     //--------------------------------------------------
-    // 3. Thread + sender
+    // 3. BUILD MENTIONS
+    //--------------------------------------------------
+    const mentions = {};
+    for (const item of mdata || []) {
+        if (!item) continue;
+
+        const uid = item.i || item.uid || item.id;
+        if (!uid) continue;
+
+        let text = "@mention";
+
+        if (typeof item.o === "number" && typeof item.l === "number")
+            text = body.substring(item.o, item.o + item.l) || text;
+
+        mentions[uid.toString()] = text;
+    }
+
+    //--------------------------------------------------
+    // 4. THREAD + SENDER
     //--------------------------------------------------
     const rawThreadID =
-        md?.threadKey?.threadFbId ||
-        md?.threadKey?.otherUserFbId ||
+        md?.threadKey?.threadFbId ??
+        md?.threadKey?.otherUserFbId ??
+        delta?.threadID ??
         "";
 
-    const senderID = md?.actorFbId?.toString() || "";
+    const senderID =
+        md?.actorFbId ??
+        delta?.senderID ??
+        "";
 
     //--------------------------------------------------
-    // 4. Attachments safe parse
-    //--------------------------------------------------
-    const attachments = Array.isArray(delta?.attachments)
-        ? delta.attachments
-        : [];
-
-    //--------------------------------------------------
-    // 5. Participants
-    //--------------------------------------------------
-    const participantIDs =
-        delta?.participants ||
-        md?.cid?.canonicalParticipantFbids ||
-        [];
-
-    //--------------------------------------------------
-    // 6. Final event object (GoatBot compatible)
+    // 5. FINAL OBJECT (GoatBot compatible)
     //--------------------------------------------------
     return {
         type: "message",
-        senderID,
+        senderID: senderID.toString(),
         threadID: rawThreadID.toString(),
-        messageID: md?.messageId || "",
+        messageID: md?.messageId ?? delta?.messageID ?? "",
         body,
         args: body.trim() ? body.trim().split(/\s+/) : [],
         mentions,
-        attachments,
-        timestamp: md?.timestamp || Date.now(),
+        attachments: delta?.attachments ?? [],
+        timestamp: md?.timestamp ?? Date.now(),
         isGroup: !!md?.threadKey?.threadFbId,
-        participantIDs
+        participantIDs:
+            delta?.participants ??
+            md?.cid?.canonicalParticipantFbids ??
+            []
     };
 }
-
 function formatID(id) {
     return id ? id.toString().replace(/^fbid[:.]/, "") : id;
 } 
