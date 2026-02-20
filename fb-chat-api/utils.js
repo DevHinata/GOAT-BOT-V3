@@ -723,35 +723,57 @@ function formatAttachment(attachments, attachmentIds, attachmentMap, shareMap) {
  */
 
 function formatDeltaMessage(m) {
-    var md = m.delta.messageMetadata;
-    var mdata = m.delta.data === undefined ? [] : m.delta.data.prng === undefined ? [] : JSON.parse(m.delta.data.prng);
-    var m_id = mdata.map(u => u.i);
-    var m_offset = mdata.map(u => u.o);
-    var m_length = mdata.map(u => u.l);
-    var mentions = {};
-    var body = m.delta.body || "";
-    var args = body == "" ? [] : body.trim().split(/\s+/);
-    for (var i = 0; i < m_id.length; i++) mentions[m_id[i]] = m.delta.body.substring(m_offset[i], m_offset[i] + m_length[i]);
+    const { delta } = m;
+    const { messageMetadata: md = {}, data = {}, body = "" } = delta || {};
+
+    // Mention Parsing
+    const mentions = {};
+    try {
+        const mdata = data.prng && data.prng !== "null"
+            ? JSON.parse(data.prng)
+            : [];
+
+        for (const item of mdata) {
+            if (!item || item.i == null || item.o == null || item.l == null) continue;
+            mentions[item.i] = body.substring(item.o, item.o + item.l);
+        }
+    } catch (e) {
+        console.error("Mention parse error:", e);
+    }
+
+    // Args
+    const args = body.trim() ? body.trim().split(/\s+/) : [];
+
+    // Thread ID
+    const rawThreadID = (
+        md?.threadKey?.threadFbId ||
+        md?.threadKey?.otherUserFbId ||
+        ""
+    ).toString();
 
     return {
         type: "message",
-        senderID: formatID(md.actorFbId.toString()),
-        threadID: formatID((md.threadKey.threadFbId || md.threadKey.otherUserFbId).toString()),
-        messageID: md.messageId,
-        args: args,
-        body: body,
-        attachments: (m.delta.attachments || []).map(v => _formatAttachment(v)),
-        mentions: mentions,
-        timestamp: md.timestamp,
-        isGroup: !!md.threadKey.threadFbId,
-        participantIDs: m.delta.participants || (md.cid ? md.cid.canonicalParticipantFbids : []) || []
+        senderID: formatID(md?.actorFbId),
+        threadID: formatID(rawThreadID),
+        messageID: md?.messageId,
+        args,
+        body,
+        attachments: (delta?.attachments || []).map(a => {
+            try { return _formatAttachment(a); }
+            catch { return null; }
+        }).filter(Boolean),
+        mentions,
+        timestamp: md?.timestamp,
+        isGroup: !!md?.threadKey?.threadFbId,
+        participantIDs: Array.isArray(delta?.participants)
+            ? delta.participants
+            : md?.cid?.canonicalParticipantFbids || []
     };
 }
 
 function formatID(id) {
-    if (id != undefined && id != null) return id.replace(/(fb)?id[:.]/, "");
-    else return id;
-}
+    return id ? id.toString().replace(/^fbid[:.]/, "") : id;
+} 
 
 function formatMessage(m) {
     var originalMessage = m.message ? m.message : m;
