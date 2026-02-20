@@ -723,51 +723,83 @@ function formatAttachment(attachments, attachmentIds, attachmentMap, shareMap) {
  */
 
 function formatDeltaMessage(m) {
-    const { delta } = m;
-    const { messageMetadata: md = {}, data = {}, body = "" } = delta || {};
+    const delta = m?.delta || {};
+    const md = delta?.messageMetadata || {};
+    const data = delta?.data || {};
 
-    // Mention Parsing
+    //--------------------------------------------------
+    // 1. Get body safely (Messenger sends in many places)
+    //--------------------------------------------------
+    const body =
+        delta?.body ??
+        delta?.message?.body ??
+        "";
+
+    //--------------------------------------------------
+    // 2. Parse mentions correctly
+    //--------------------------------------------------
     const mentions = {};
+
     try {
-        const mdata = data.prng && data.prng !== "null"
-            ? JSON.parse(data.prng)
-            : [];
+        const mdata = data?.prng ? JSON.parse(data.prng) : [];
 
         for (const item of mdata) {
-            if (!item || item.i == null || item.o == null || item.l == null) continue;
-            mentions[item.i] = body.substring(item.o, item.o + item.l);
+            if (!item?.i) continue;
+
+            const uid = item.i.toString();
+
+            let text = "@mention";
+
+            if (typeof item.o === "number" && typeof item.l === "number") {
+                text = body.substring(item.o, item.o + item.l) || "@mention";
+            }
+
+            mentions[uid] = text;
         }
     } catch (e) {
-        console.error("Mention parse error:", e);
+        console.log("Mention parse error:", e);
     }
 
-    // Args
-    const args = body.trim() ? body.trim().split(/\s+/) : [];
-
-    // Thread ID
-    const rawThreadID = (
+    //--------------------------------------------------
+    // 3. Thread + sender
+    //--------------------------------------------------
+    const rawThreadID =
         md?.threadKey?.threadFbId ||
         md?.threadKey?.otherUserFbId ||
-        ""
-    ).toString();
+        "";
 
+    const senderID = md?.actorFbId?.toString() || "";
+
+    //--------------------------------------------------
+    // 4. Attachments safe parse
+    //--------------------------------------------------
+    const attachments = Array.isArray(delta?.attachments)
+        ? delta.attachments
+        : [];
+
+    //--------------------------------------------------
+    // 5. Participants
+    //--------------------------------------------------
+    const participantIDs =
+        delta?.participants ||
+        md?.cid?.canonicalParticipantFbids ||
+        [];
+
+    //--------------------------------------------------
+    // 6. Final event object (GoatBot compatible)
+    //--------------------------------------------------
     return {
         type: "message",
-        senderID: formatID(md?.actorFbId),
-        threadID: formatID(rawThreadID),
-        messageID: md?.messageId,
-        args,
+        senderID,
+        threadID: rawThreadID.toString(),
+        messageID: md?.messageId || "",
         body,
-        attachments: (delta?.attachments || []).map(a => {
-            try { return _formatAttachment(a); }
-            catch { return null; }
-        }).filter(Boolean),
+        args: body.trim() ? body.trim().split(/\s+/) : [],
         mentions,
-        timestamp: md?.timestamp,
+        attachments,
+        timestamp: md?.timestamp || Date.now(),
         isGroup: !!md?.threadKey?.threadFbId,
-        participantIDs: Array.isArray(delta?.participants)
-            ? delta.participants
-            : md?.cid?.canonicalParticipantFbids || []
+        participantIDs
     };
 }
 
